@@ -57,6 +57,7 @@ kfree(char *v)
   r = (struct run*)v;
   r->next = kmem.freelist;
   kmem.freelist = r;
+  kmem.ref_cnt[]--; 
   release(&kmem.lock);
 }
 
@@ -75,4 +76,22 @@ kalloc(void)
   release(&kmem.lock);
   return (char*)r;
 }
+
+int
+countFree(void) {
+  int count = 0;
+  struct run *r;
+  
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+  while (r->next != NULL) {
+    count++;
+    r = r->next; 
+  }
+  kmem.free_pages = count;
+  
+  release(&kmem.lock);
+  return count;
+}
+
 
