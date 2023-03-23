@@ -66,6 +66,7 @@ void            ioapicinit(void);
 char*           kalloc(void);
 void            kfree(char*);
 void            kinit(void);
+int             countFree(void);
 
 // kbd.c
 void            kbdintr(void);
