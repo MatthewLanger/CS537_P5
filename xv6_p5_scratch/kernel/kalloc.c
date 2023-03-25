@@ -24,6 +24,27 @@ struct {
 
 } kmem;
 
+// ADDED FUNCTION: increments ref_cnt based on addr
+void
+increment(char *v) {
+  acquire(&kmem.lock);
+    int addr = (uint)v;
+    int index = addr / PGSIZE;
+    kmem.ref_cnt[index]++; 
+  release(&kmem.lock);
+}
+
+// ADDED FUNCTION: decrements ref_cnt based on addr
+void
+decrement(char *v) {
+  acquire(&kmem.lock);
+   int addr = (uint)v;
+   int index = addr / PGSIZE;
+   kmem.ref_cnt[index]--; 
+  release(&kmem.lock);
+
+}
+
 extern char end[]; // first address after kernel loaded from ELF file
 
 // Initialize free list of physical pages.
@@ -31,7 +52,6 @@ void
 kinit(void)
 {
   char *p;
-
   initlock(&kmem.lock, "kmem");
   p = (char*)PGROUNDUP((uint)end);
   for(; p + PGSIZE <= (char*)PHYSTOP; p += PGSIZE)
@@ -52,13 +72,12 @@ kfree(char *v)
 
   // Fill with junk to catch dangling refs.
   memset(v, 1, PGSIZE);
-
   acquire(&kmem.lock);
   r = (struct run*)v;
   r->next = kmem.freelist;
   kmem.freelist = r;
-  kmem.ref_cnt[]--; 
   release(&kmem.lock);
+  decrement(v); // decreases ref_cnt when page freed, might need to be set to zero
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -68,12 +87,12 @@ char*
 kalloc(void)
 {
   struct run *r;
-
   acquire(&kmem.lock);
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
   release(&kmem.lock);
+  increment((char*)r); // increments ref_cnt when page added
   return (char*)r;
 }
 
@@ -81,7 +100,7 @@ int
 countFree(void) {
   int count = 0;
   struct run *r;
-  
+
   acquire(&kmem.lock);
   r = kmem.freelist;
   while (r->next != NULL) {
@@ -93,5 +112,4 @@ countFree(void) {
   release(&kmem.lock);
   return count;
 }
-
 

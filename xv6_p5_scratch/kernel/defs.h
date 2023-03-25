@@ -67,6 +67,8 @@ char*           kalloc(void);
 void            kfree(char*);
 void            kinit(void);
 int             countFree(void);
+void            increment(char*);
+void            decrement(char*);
 
 // kbd.c
 void            kbdintr(void);
