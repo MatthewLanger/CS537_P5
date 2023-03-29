@@ -61,6 +61,7 @@ walkpgdir(pde_t *pgdir, const void *va, int create)
   } else {
     if(!create || (pgtab = (pte_t*)kalloc()) == 0)
       return 0;
+
     // Make sure all those PTE_P bits are zero.
     memset(pgtab, 0, PGSIZE);
     // The permissions here are overly generous, but they can
@@ -314,13 +315,15 @@ copyuvm(pde_t *pgdir, uint sz)
     pa = PTE_ADDR(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
-      goto bad;
+         goto bad;
     
     memmove(mem, (char*)pa, PGSIZE);
     if(mappages(d, (void*)i, PGSIZE, PADDR(mem), flags) < 0)
       goto bad;
   }
+  lcr3(PADDR(pgdir));
   return d;
+
 
 bad:
   freevm(d);
@@ -366,3 +369,130 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   }
   return 0;
 }
+
+// ADDED cowuvm to implement copy on write
+pde_t*
+cowuvm(pde_t *pgdir, uint sz) {
+  pde_t *d;
+  pte_t *pte;
+  uint pa, i, flags;
+
+  if((d = setupkvm()) == 0)
+    return 0;
+
+  for(i = 0; i < sz; i += PGSIZE) {
+    if((pte = walkpgdir(pgdir, (void*)i, 0)) == 0)
+      panic("cowuvm: pte should exist");
+    if(!(*pte & PTE_P))
+      panic("cowuvm: page not present");
+    pa = PTE_ADDR(*pte);
+    flags = PTE_FLAGS(*pte);
+    increment((char*)pa); // increment reference to phys address
+    *pte &= ~PTE_W; // invalidate write flag
+
+    if(mappages(d, (void*)i, PGSIZE, pa, flags) < 0)
+      goto bad;
+  }
+  lcr3(PADDR(pgdir));
+  return d;
+
+bad:
+  freevm(d);
+  return 0;
+}
+
+
+void
+pgflt_handler(void) {
+  {
+  uint va = rcr2();
+  pde_t *pte = walkpgdir(proc->pgdir, (void*)va, 0);
+
+  // Check if page fault is caused by a non-present page
+  if (!(*pte & PTE_P)) {
+    cprintf("handle_page_fault: Non-present page\n");
+    kill(0);
+  }
+
+  // Check if page fault is caused by a read-only page
+  //pte_t *pte = (pte_t*)PTE_ADDR(pde[PDX(va)]);
+  if (!(*pte & PTE_W)) {
+    cprintf("handle_page_fault: Read-only page\n");
+
+    // Allocate a new page for writing
+    if (getRefCount(PTE_ADDR(*pte)) == 1) {
+      *pte |= PTE_W; // set write flag
+      lcr3(PADDR(proc->pgdir));
+    } else {
+      char *mem = kalloc();
+      if (mem == 0) {
+        cprintf("kalloc error\n");
+        return;
+      }
+      // Copy the page that caused the fault to the new page
+      memmove(mem, (char*)va, PGSIZE);
+      // Make the new page writable
+      *pte = PADDR(mem) | PTE_U | PTE_W | PTE_P;
+
+      // Decrement reference to old page
+      cprintf("pte addr = %d\n", PTE_ADDR(*pte));
+      kfree((char*)va);
+      
+      // Flush TLB
+      lcr3(PADDR(proc->pgdir));
+    }
+  }
+}
+}
+/*
+void
+pgflt_handler(void) {
+  uint faulting_va = (uint) rcr2();
+  char* page_va = PGROUNDDOWN(faulting_va); // gets the va of the page that caused the fault
+
+  if((uint)faulting_va > USERTOP) {
+    cprintf("va invalid\n");
+    goto bad;
+  }
+
+  pte_t *pte_address = walkpgdir(proc->pgdir, page_va, 0); // returns a virtual address of the index of the page table where faulting_va should be mapped
+
+  if (pte_address == NULL || !(*pte_address & PTE_P)) {
+    cprintf("COW: Invalid virtual address\n");
+    kill(0);
+  } else if (getRefCount(PTE_ADDR(*pte_address)) <= 1) {
+    cprintf("one ref\n");
+    *pte_address |= PTE_W; // set write flag
+    lcr3(PADDR(proc->pgdir));
+  } else {
+    cprintf("more than one ref\n");
+    char* new_page;
+    //uint flags = PTE_FLAGS(pte_address);
+    if ((new_page = kalloc()) == 0) {
+      cprintf("kalloc error\n");
+      goto bad;
+    }
+
+    memmove(new_page, (char*)PTE_ADDR(pte_address), PGSIZE);
+
+    *pte_address = (uint) new_page;
+    if(mappages(proc->pgdir, (char*)page_va, PGSIZE, 0, 0) < 0) {
+      cprintf("mappages error\n");
+      goto bad;
+    }
+
+    mappages(proc->pgdir, (char*)page_va, PGSIZE, PADDR(new_page), flags);
+
+    uint new_page_addr = PTE_ADDR(new_page);
+    new_page_addr |= PTE_W;
+    //cprintf("pte_address rounded down %d\n", PGROUNDDOWN(*pte_address));
+    kfree((char*)PGROUNDDOWN(*pte_address));
+    lcr3(PADDR(proc->pgdir));
+
+    bad:
+    cprintf("IN BAD\n");
+    freevm(proc->pgdir);
+    kill(0);
+  } 
+}
+*/

@@ -1,6 +1,7 @@
 
 # user programs
 USER_PROGS := \
+	testGetPages\
 	cat\
 	echo\
 	forktest\
